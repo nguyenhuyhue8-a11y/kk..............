@@ -10,7 +10,7 @@ from datetime import datetime, timezone, timedelta
 
 app = Flask(__name__)
 
-# ================= CẤU HÌNH HỆ THỐNG V20 (STRICT IP) =================
+# ================= CẤU HÌNH HỆ THỐNG V21 (FIX REAL IP) =================
 HISTORY_FILE = "history_buff.txt"
 STATS_FILE = "auto_stats.json"
 KEYS_FILE = "keys_store.json"
@@ -35,7 +35,7 @@ HTML_PAGE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🚀 TIKTOK BUFF PRO v20 ULTIMATE</title>
+    <title>🚀 TIKTOK BUFF PRO v21 ULTIMATE</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;800&display=swap');
@@ -67,7 +67,7 @@ HTML_PAGE = """
 <body>
     <div class="theme-toggle" onclick="toggleTheme()"><i id="theme-icon" class="fas fa-moon"></i></div>
     <div class="neu-box">
-        <h1><i class="fab fa-tiktok"></i> ADMIN BUFF v20</h1>
+        <h1><i class="fab fa-tiktok"></i> ADMIN BUFF v21</h1>
         <div style="text-align: center;">
             <button class="neu-btn ping-btn" onclick="checkServerPing()"><i class="fas fa-satellite-dish"></i> CHECK SEVER PING: <span id="ping-val">--</span></button>
         </div>
@@ -77,7 +77,7 @@ HTML_PAGE = """
     </div>
     <div class="neu-box">
         <h3 style="margin-top:0"><i class="fas fa-terminal"></i> LIVE LOGS</h3>
-        <div id="log-area"><div class="st-info">[SYSTEM] Hệ thống v20 sẵn sàng...</div></div>
+        <div id="log-area"><div class="st-info">[SYSTEM] Hệ thống v21 sẵn sàng...</div></div>
     </div>
     <script>
         function toggleTheme() { document.body.classList.toggle('dark-mode'); const icon = document.getElementById('theme-icon'); icon.className = document.body.classList.contains('dark-mode') ? 'fas fa-sun' : 'fas fa-moon'; }
@@ -160,6 +160,14 @@ def format_time_diff(seconds):
 def get_vn_date_str():
     return datetime.now(timezone(timedelta(hours=7))).strftime('%Y-%m-%d')
 
+# --- HÀM LẤY IP THẬT (FIX PROXY/RENDER) ---
+def get_client_ip():
+    # Render/Cloudflare gửi IP thật trong header X-Forwarded-For
+    if request.headers.get('X-Forwarded-For'):
+        # Lấy IP đầu tiên trong chuỗi (IP của client gốc)
+        return request.headers.get('X-Forwarded-For').split(',')[0].strip()
+    return request.remote_addr
+
 # ==========================================
 # 2. HELPER LOGIC
 # ==========================================
@@ -218,7 +226,7 @@ def get_live_follower_count(username):
         url = "https://www.tikwm.com/api/user/info"
         params = {"unique_id": username}
         headers = { "User-Agent": "Mozilla/5.0" }
-        r = requests.get(url, params=params, headers=headers, timeout=18)
+        r = requests.get(url, params=params, headers=headers, timeout=10)
         if r.status_code == 200:
             data = r.json()
             if data.get("code") == 0: return int(data["data"]["stats"]["followerCount"])
@@ -258,7 +266,7 @@ def worker_buff(task_id, username, used_key=None, target_counts=1):
                 tasks_status[task_id]["msg"] = f"[Lần {round_display}/{target_counts}] Đang quét thông tin..."
                 r1 = ss.post("https://tikfollowers.com/api/search", 
                              json={"input": username, "type": "getUserDetails"}, 
-                             headers=headers_search, timeout=22)
+                             headers=headers_search, timeout=20)
                 d1 = r1.json()
                 if d1.get("status") != "success": 
                     raise Exception(d1.get("message", "User không tồn tại."))
@@ -282,7 +290,7 @@ def worker_buff(task_id, username, used_key=None, target_counts=1):
 
             api_slow = False
             try:
-                ss.post("https://tikfollowers.com/api/process", json=payload, headers=headers_search, timeout=28)
+                ss.post("https://tikfollowers.com/api/process", json=payload, headers=headers_search, timeout=25)
             except (ReadTimeout, ConnectTimeout):
                 api_slow = True
                 tasks_status[task_id]["msg"] = f"[Lần {round_display}] API chậm, chờ 1 chút..."
@@ -335,7 +343,7 @@ def worker_buff(task_id, username, used_key=None, target_counts=1):
         if task_id in tasks_status: del tasks_status[task_id]
 
 # ==========================================
-# 4. API ENDPOINTS (NÂNG CẤP V20)
+# 4. API ENDPOINTS (NÂNG CẤP V21)
 # ==========================================
 
 @app.route('/ping', methods=['GET'])
@@ -386,7 +394,7 @@ def check_auto_details():
         "msg": task_data.get("msg"),
         "username": user, 
         "time_running": f"{m} phút {s} giây",
-        "progress": f"{done}/{target} lần", # Hiển thị tiến độ
+        "progress": f"{done}/{target} lần", 
         "date": get_vn_date_str(), 
         "total_success_count": get_success_count(user),
         "current_followers": task_data.get("current_followers", "Chưa cập nhật"),
@@ -407,7 +415,7 @@ def check_auto_details():
 
     return jsonify(response)
 
-# --- AUTO: STRICT IP LOCK (V20) ---
+# --- AUTO: STRICT IP LOCK (V21 - FIX PROXY IP) ---
 @app.route('/auto', methods=['GET'])
 def api_auto():
     username = request.args.get('username')
@@ -417,7 +425,8 @@ def api_auto():
     except:
         req_counts = 1
 
-    ip = request.remote_addr
+    # THAY ĐỔI V21: DÙNG HÀM get_client_ip ĐỂ LẤY IP THẬT
+    ip = get_client_ip()
     
     if not SERVER_ACTIVE and key != SERVER_KEY: return jsonify({"status": "maintenance"})
     keys_db = load_json(KEYS_FILE)
@@ -432,22 +441,17 @@ def api_auto():
                 del keys_db[key]; save_json(KEYS_FILE, keys_db)
                 return jsonify({"status": "error", "msg": "Key hết hạn"})
             
-            # --- V20 STRICT IP CHECK ---
-            # Chỉ cho phép IP đã đăng ký sử dụng tiếp.
-            # Nếu IP chưa có trong list, thì check xem còn slot không.
+            # --- V20 STRICT IP CHECK (DÙNG IP THẬT) ---
             if ip not in data["used_ips"]:
                 if len(data["used_ips"]) >= data["max_devices"]:
-                    # Đây là chỗ chặn IP lạ
                     return jsonify({
                         "status": "error", 
-                        "msg": "Key này đã bị khóa theo IP khác! Bạn không thể dùng."
+                        "msg": f"Key đã bị khóa theo IP khác ({data['used_ips'][0]})! IP của bạn: {ip}"
                     })
-                # Nếu còn slot thì khóa Key vào IP này
                 data["used_ips"].append(ip)
                 save_json(KEYS_FILE, keys_db)
             
             # --- CHECK USERNAME LIMIT ---
-            # IP đã OK rồi, giờ check số lượng tài khoản (acc)
             used_users = data.get("used_users", [])
             limit_users = data.get("max_users", 9999)
             
