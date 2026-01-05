@@ -10,7 +10,7 @@ from datetime import datetime, timezone, timedelta
 
 app = Flask(__name__)
 
-# ================= CẤU HÌNH HỆ THỐNG v12 =================
+# ================= CẤU HÌNH HỆ THỐNG V20 (STRICT IP) =================
 HISTORY_FILE = "history_buff.txt"
 STATS_FILE = "auto_stats.json"
 KEYS_FILE = "keys_store.json"
@@ -20,14 +20,14 @@ running_users = {}
 
 # Thời gian chờ giữa các lần buff (15 phút = 900 giây)
 COOLDOWN_SECONDS = 15 * 60 
-DELETE_TASK_AFTER = 5 * 60 # Xóa task sau khi hoàn thành toàn bộ
+DELETE_TASK_AFTER = 5 * 60 
 
 ADMIN_KEY_MASTER = "ADMINVIPFREEFL"
 SERVER_KEY = "SEVERKINGADMINFL"
 SERVER_ACTIVE = True
 
 # ==========================================
-# 0. GIAO DIỆN WEB (v12)
+# 0. GIAO DIỆN WEB (v20)
 # ==========================================
 HTML_PAGE = """
 <!DOCTYPE html>
@@ -35,7 +35,7 @@ HTML_PAGE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🚀 TIKTOK BUFF PRO v12 ULTIMATE</title>
+    <title>🚀 TIKTOK BUFF PRO v20 ULTIMATE</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;800&display=swap');
@@ -67,7 +67,7 @@ HTML_PAGE = """
 <body>
     <div class="theme-toggle" onclick="toggleTheme()"><i id="theme-icon" class="fas fa-moon"></i></div>
     <div class="neu-box">
-        <h1><i class="fab fa-tiktok"></i> ADMIN BUFF v12</h1>
+        <h1><i class="fab fa-tiktok"></i> ADMIN BUFF v20</h1>
         <div style="text-align: center;">
             <button class="neu-btn ping-btn" onclick="checkServerPing()"><i class="fas fa-satellite-dish"></i> CHECK SEVER PING: <span id="ping-val">--</span></button>
         </div>
@@ -77,7 +77,7 @@ HTML_PAGE = """
     </div>
     <div class="neu-box">
         <h3 style="margin-top:0"><i class="fas fa-terminal"></i> LIVE LOGS</h3>
-        <div id="log-area"><div class="st-info">[SYSTEM] Hệ thống v12 sẵn sàng...</div></div>
+        <div id="log-area"><div class="st-info">[SYSTEM] Hệ thống v20 sẵn sàng...</div></div>
     </div>
     <script>
         function toggleTheme() { document.body.classList.toggle('dark-mode'); const icon = document.getElementById('theme-icon'); icon.className = document.body.classList.contains('dark-mode') ? 'fas fa-sun' : 'fas fa-moon'; }
@@ -211,7 +211,7 @@ def get_key_expiry_info(key):
     return format_time_diff(remaining)
 
 # ==========================================
-# 3. WORKER BUFF (LOGIC V12 - LOOP MULTI-COUNTS)
+# 3. WORKER BUFF (LOGIC V20 - LOOP MULTI-COUNTS)
 # ==========================================
 def get_live_follower_count(username):
     try:
@@ -258,7 +258,7 @@ def worker_buff(task_id, username, used_key=None, target_counts=1):
                 tasks_status[task_id]["msg"] = f"[Lần {round_display}/{target_counts}] Đang quét thông tin..."
                 r1 = ss.post("https://tikfollowers.com/api/search", 
                              json={"input": username, "type": "getUserDetails"}, 
-                             headers=headers_search, timeout=20)
+                             headers=headers_search, timeout=22)
                 d1 = r1.json()
                 if d1.get("status") != "success": 
                     raise Exception(d1.get("message", "User không tồn tại."))
@@ -324,21 +324,18 @@ def worker_buff(task_id, username, used_key=None, target_counts=1):
                 # Nếu lần này thất bại -> Thử lại sau 1 phút (hoặc dừng tùy logic)
                 tasks_status[task_id]["msg"] = f"[Lần {round_display}] Thất bại. Thử lại sau 60s..."
                 time.sleep(60)
-                # (Ở đây mình chọn tiếp tục vòng lặp để retry lần này, không tăng success_round)
 
-        # Kết thúc vòng lặp
         tasks_status[task_id]["status"] = "success"
 
     except Exception as e:
         tasks_status[task_id] = {"status": "error", "msg": f"System Error: {str(e)}"}
     finally:
         if username in running_users: del running_users[username]
-        # Giữ task online thêm 1 lúc để user đọc kết quả rồi xóa
         time.sleep(DELETE_TASK_AFTER)
         if task_id in tasks_status: del tasks_status[task_id]
 
 # ==========================================
-# 4. API ENDPOINTS (NÂNG CẤP V12)
+# 4. API ENDPOINTS (NÂNG CẤP V20)
 # ==========================================
 
 @app.route('/ping', methods=['GET'])
@@ -396,7 +393,6 @@ def check_auto_details():
         "cooldown_msg": ""
     }
 
-    # Nếu Đã xong hết
     if task_data.get("status") == "success":
         response["msg"] = "✅ Đã hoàn thành toàn bộ yêu cầu!"
         can_buff, wait_time = check_history_cooldown(user)
@@ -411,13 +407,11 @@ def check_auto_details():
 
     return jsonify(response)
 
-# --- AUTO: Logic check Time vs Counts ---
+# --- AUTO: STRICT IP LOCK (V20) ---
 @app.route('/auto', methods=['GET'])
 def api_auto():
     username = request.args.get('username')
     key = request.args.get('keyauto')
-    
-    # Lấy số lần muốn buff (Mặc định là 1)
     try:
         req_counts = int(request.args.get('counts', 1))
     except:
@@ -438,36 +432,46 @@ def api_auto():
                 del keys_db[key]; save_json(KEYS_FILE, keys_db)
                 return jsonify({"status": "error", "msg": "Key hết hạn"})
             
-            # --- CHECK TIME LOGIC (MỚI) ---
-            # 1 lần = 15 phút (900s). Nếu req_counts > 1, cần (req_counts - 1) * 900s chờ + thời gian chạy
-            # Tính đơn giản: Cần ít nhất (req_counts * 15 phút) thời gian còn lại
-            required_seconds = req_counts * COOLDOWN_SECONDS
-            remaining_key_seconds = data["expire"] - current_t
-            
-            if required_seconds > remaining_key_seconds:
-                # Tính số lần tối đa có thể chạy
-                max_possible = int(remaining_key_seconds // COOLDOWN_SECONDS)
-                if max_possible < 1: max_possible = 1 # Ít nhất cho chạy 1 lần nếu còn tí time
-                
-                return jsonify({
-                    "status": "error",
-                    "msg": f"Key không đủ thời gian cho {req_counts} lần! (Cần {required_seconds//60}p, còn {int(remaining_key_seconds//60)}p). Tối đa chỉ được: {max_possible} lần.",
-                    "max_allowed": max_possible
-                })
-            # ------------------------------
-
+            # --- V20 STRICT IP CHECK ---
+            # Chỉ cho phép IP đã đăng ký sử dụng tiếp.
+            # Nếu IP chưa có trong list, thì check xem còn slot không.
             if ip not in data["used_ips"]:
-                if len(data["used_ips"]) >= data["max_devices"]: return jsonify({"status": "error", "msg": "Max devices"})
+                if len(data["used_ips"]) >= data["max_devices"]:
+                    # Đây là chỗ chặn IP lạ
+                    return jsonify({
+                        "status": "error", 
+                        "msg": "Key này đã bị khóa theo IP khác! Bạn không thể dùng."
+                    })
+                # Nếu còn slot thì khóa Key vào IP này
                 data["used_ips"].append(ip)
                 save_json(KEYS_FILE, keys_db)
             
+            # --- CHECK USERNAME LIMIT ---
+            # IP đã OK rồi, giờ check số lượng tài khoản (acc)
             used_users = data.get("used_users", [])
             limit_users = data.get("max_users", 9999)
+            
             if username not in used_users:
-                if len(used_users) >= limit_users: return jsonify({"status": "error", "msg": f"Max users limit ({limit_users})"})
+                if len(used_users) >= limit_users:
+                    return jsonify({
+                        "status": "error", 
+                        "msg": f"Key đã hết lượt thêm User mới (Max: {limit_users} accs)"
+                    })
                 used_users.append(username)
                 data["used_users"] = used_users
                 save_json(KEYS_FILE, keys_db)
+            
+            # Check Time Logic
+            required_seconds = req_counts * COOLDOWN_SECONDS
+            remaining_key_seconds = data["expire"] - current_t
+            if required_seconds > remaining_key_seconds:
+                max_possible = int(remaining_key_seconds // COOLDOWN_SECONDS)
+                if max_possible < 1: max_possible = 1
+                return jsonify({
+                    "status": "error",
+                    "msg": f"Key không đủ thời gian cho {req_counts} lần! Max: {max_possible} lần.",
+                    "max_allowed": max_possible
+                })
             
             key_expiry_str = format_time_diff(remaining_key_seconds)
         else:
@@ -483,8 +487,6 @@ def api_auto():
     
     task_id = str(uuid.uuid4())
     running_users[username] = task_id
-    
-    # Truyền req_counts vào worker
     threading.Thread(target=worker_buff, args=(task_id, username, key, req_counts)).start()
     
     return jsonify({ 
