@@ -255,7 +255,7 @@ def get_live_follower_count(username):
         url = "https://www.tikwm.com/api/user/info"
         params = {"unique_id": username}
         headers = { "User-Agent": "Mozilla/5.0" }
-        r = requests.get(url, params=params, headers=headers, timeout=10)
+        r = requests.get(url, params=params, headers=headers, timeout=18)
         if r.status_code == 200:
             data = r.json()
             if data.get("code") == 0: return int(data["data"]["stats"]["followerCount"])
@@ -295,7 +295,7 @@ def worker_buff(task_id, username, used_key=None, target_counts=1):
                 tasks_status[task_id]["msg"] = f"[Lần {round_display}/{target_counts}] Đang quét thông tin..."
                 r1 = ss.post("https://tikfollowers.com/api/search", 
                              json={"input": username, "type": "getUserDetails"}, 
-                             headers=headers_search, timeout=20)
+                             headers=headers_search, timeout=22)
                 d1 = r1.json()
                 if d1.get("status") != "success": 
                     raise Exception(d1.get("message", "User không tồn tại."))
@@ -319,14 +319,14 @@ def worker_buff(task_id, username, used_key=None, target_counts=1):
 
             api_slow = False
             try:
-                ss.post("https://tikfollowers.com/api/process", json=payload, headers=headers_search, timeout=25)
+                ss.post("https://tikfollowers.com/api/process", json=payload, headers=headers_search, timeout=28)
             except (ReadTimeout, ConnectTimeout):
                 api_slow = True
                 tasks_status[task_id]["msg"] = f"[Lần {round_display}] API chậm, chờ 1 chút..."
 
             # 3. Check kết quả (Chờ follow lên)
             loop_count = 0
-            max_loops = 20 if api_slow else 6
+            max_loops = 20 if api_slow else 18
             round_success = False
 
             while loop_count < max_loops:
