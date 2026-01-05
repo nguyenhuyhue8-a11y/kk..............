@@ -10,7 +10,7 @@ from datetime import datetime, timezone, timedelta
 
 app = Flask(__name__)
 
-# ================= CẤU HÌNH HỆ THỐNG =================
+# ================= CẤU HÌNH HỆ THỐNG v12 =================
 HISTORY_FILE = "history_buff.txt"
 STATS_FILE = "auto_stats.json"
 KEYS_FILE = "keys_store.json"
@@ -18,15 +18,16 @@ KEYS_FILE = "keys_store.json"
 tasks_status = {}
 running_users = {}
 
+# Thời gian chờ giữa các lần buff (15 phút = 900 giây)
 COOLDOWN_SECONDS = 15 * 60 
-DELETE_TASK_AFTER = 5 * 60
+DELETE_TASK_AFTER = 5 * 60 # Xóa task sau khi hoàn thành toàn bộ
 
 ADMIN_KEY_MASTER = "ADMINVIPFREEFL"
 SERVER_KEY = "SEVERKINGADMINFL"
 SERVER_ACTIVE = True
 
 # ==========================================
-# 0. GIAO DIỆN WEB 
+# 0. GIAO DIỆN WEB (v12)
 # ==========================================
 HTML_PAGE = """
 <!DOCTYPE html>
@@ -34,7 +35,7 @@ HTML_PAGE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🚀 TIKTOK BUFF PRO ULTIMATE</title>
+    <title>🚀 TIKTOK BUFF PRO v12 ULTIMATE</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;800&display=swap');
@@ -66,7 +67,7 @@ HTML_PAGE = """
 <body>
     <div class="theme-toggle" onclick="toggleTheme()"><i id="theme-icon" class="fas fa-moon"></i></div>
     <div class="neu-box">
-        <h1><i class="fab fa-tiktok"></i> ADMIN BUFF </h1>
+        <h1><i class="fab fa-tiktok"></i> ADMIN BUFF v12</h1>
         <div style="text-align: center;">
             <button class="neu-btn ping-btn" onclick="checkServerPing()"><i class="fas fa-satellite-dish"></i> CHECK SEVER PING: <span id="ping-val">--</span></button>
         </div>
@@ -76,7 +77,7 @@ HTML_PAGE = """
     </div>
     <div class="neu-box">
         <h3 style="margin-top:0"><i class="fas fa-terminal"></i> LIVE LOGS</h3>
-        <div id="log-area"><div class="st-info">[SYSTEM] Hệ thống v11 sẵn sàng...</div></div>
+        <div id="log-area"><div class="st-info">[SYSTEM] Hệ thống v12 sẵn sàng...</div></div>
     </div>
     <script>
         function toggleTheme() { document.body.classList.toggle('dark-mode'); const icon = document.getElementById('theme-icon'); icon.className = document.body.classList.contains('dark-mode') ? 'fas fa-sun' : 'fas fa-moon'; }
@@ -145,7 +146,6 @@ def parse_duration(duration_str):
     return 0
 
 def format_time_diff(seconds):
-    """Chuyển giây thành ngày, giờ, phút"""
     if seconds < 0: return "Hết hạn"
     d = seconds // 86400
     h = (seconds % 86400) // 3600
@@ -201,42 +201,42 @@ def get_success_count(username):
     return stats.get(username, 0)
 
 def get_key_expiry_info(key):
-    """Lấy thông tin thời hạn key"""
     if key == ADMIN_KEY_MASTER: return "Vĩnh viễn (Admin)"
     keys_db = load_json(KEYS_FILE)
     if key not in keys_db: return "Không xác định"
-    
     data = keys_db[key]
     if data["type"] == "unlimited": return "Vĩnh viễn"
-    
     remaining = data["expire"] - time.time()
     if remaining <= 0: return "Đã hết hạn"
     return format_time_diff(remaining)
 
 # ==========================================
-# 3. WORKER BUFF (LOGIC V10)
+# 3. WORKER BUFF (LOGIC V12 - LOOP MULTI-COUNTS)
 # ==========================================
 def get_live_follower_count(username):
     try:
         url = "https://www.tikwm.com/api/user/info"
         params = {"unique_id": username}
         headers = { "User-Agent": "Mozilla/5.0" }
-        r = requests.get(url, params=params, headers=headers, timeout=10)
+        r = requests.get(url, params=params, headers=headers, timeout=18)
         if r.status_code == 200:
             data = r.json()
             if data.get("code") == 0: return int(data["data"]["stats"]["followerCount"])
         return None
     except: return None
 
-def worker_buff(task_id, username, used_key=None):
+def worker_buff(task_id, username, used_key=None, target_counts=1):
     try:
+        # Khởi tạo trạng thái
         tasks_status[task_id] = { 
             "status": "running", 
-            "msg": "Đang khởi tạo...", 
+            "msg": f"Bắt đầu buff 0/{target_counts}...", 
             "start_time": time.time(), 
             "username": username,
             "key_used": used_key,
-            "current_followers": "Đang tải..." 
+            "current_followers": "Đang tải...",
+            "target_counts": target_counts,
+            "done_counts": 0
         }
         
         ss = requests.Session()
@@ -247,119 +247,127 @@ def worker_buff(task_id, username, used_key=None):
             "Referer": "https://tikfollowers.com/"
         }
 
-        try:
-            tasks_status[task_id]["msg"] = "Đang quét thông tin..."
-            r1 = ss.post("https://tikfollowers.com/api/search", 
-                         json={"input": username, "type": "getUserDetails"}, 
-                         headers=headers_search, timeout=20)
-            d1 = r1.json()
-            if d1.get("status") != "success": 
-                raise Exception(d1.get("message", "User không tồn tại."))
+        success_round = 0
+
+        # --- VÒNG LẶP BUFF (Chạy đủ số lần requested) ---
+        while success_round < target_counts:
+            round_display = success_round + 1
             
-            current_fl = get_live_follower_count(username)
-            start_fl = current_fl if current_fl else d1.get('followers_count', 0)
-            nickname = d1.get('nickname')
+            # 1. Quét thông tin User
+            try:
+                tasks_status[task_id]["msg"] = f"[Lần {round_display}/{target_counts}] Đang quét thông tin..."
+                r1 = ss.post("https://tikfollowers.com/api/search", 
+                             json={"input": username, "type": "getUserDetails"}, 
+                             headers=headers_search, timeout=20)
+                d1 = r1.json()
+                if d1.get("status") != "success": 
+                    raise Exception(d1.get("message", "User không tồn tại."))
+                
+                current_fl = get_live_follower_count(username)
+                start_fl = current_fl if current_fl else d1.get('followers_count', 0)
+                nickname = d1.get('nickname')
+                
+            except Exception as e:
+                tasks_status[task_id]["status"] = "error"
+                tasks_status[task_id]["msg"] = str(e)
+                return # Dừng luôn nếu lỗi info
+
+            # 2. Gửi lệnh Buff
+            tasks_status[task_id]["msg"] = f"[Lần {round_display}/{target_counts}] User: {nickname}. Đang gửi lệnh..."
+            payload = { 
+                "status": "success", "token": d1.get("token"), "user_id": d1.get("user_id"), 
+                "sec_uid": d1.get("sec_uid"), "username": username, "followers_count": start_fl, 
+                "nickname": nickname, "type": "followers", "success": True 
+            }
+
+            api_slow = False
+            try:
+                ss.post("https://tikfollowers.com/api/process", json=payload, headers=headers_search, timeout=28)
+            except (ReadTimeout, ConnectTimeout):
+                api_slow = True
+                tasks_status[task_id]["msg"] = f"[Lần {round_display}] API chậm, chờ 1 chút..."
+
+            # 3. Check kết quả (Chờ follow lên)
+            loop_count = 0
+            max_loops = 20 if api_slow else 6
+            round_success = False
+
+            while loop_count < max_loops:
+                time.sleep(10)
+                now_fl = get_live_follower_count(username)
+                if now_fl and now_fl > start_fl:
+                    diff = now_fl - start_fl
+                    round_success = True
+                    # Ghi nhận thành công lần này
+                    record_cooldown_history(username) 
+                    increment_success_count(username)
+                    tasks_status[task_id]["current_followers"] = now_fl
+                    break
+                tasks_status[task_id]["msg"] = f"[Lần {round_display}] Đang check... ({loop_count+1}/{max_loops})"
+                loop_count += 1
             
-        except Exception as e:
-            tasks_status[task_id]["status"] = "error"
-            tasks_status[task_id]["msg"] = str(e)
-            return
+            if round_success:
+                success_round += 1
+                tasks_status[task_id]["done_counts"] = success_round
+                
+                # Nếu chưa phải lần cuối thì Sleep chờ cooldown
+                if success_round < target_counts:
+                    # Đếm ngược 15 phút (900 giây)
+                    for wait_s in range(COOLDOWN_SECONDS, 0, -1):
+                        m, s = divmod(wait_s, 60)
+                        tasks_status[task_id]["msg"] = f"✅ Xong lần {success_round}. Đợi {m}p {s}s buff tiếp lần {success_round+1}..."
+                        time.sleep(1)
+                else:
+                    # Đã xong tất cả các lần
+                    tasks_status[task_id]["msg"] = f"🎉 Đã hoàn thành {success_round}/{target_counts} lần buff!"
+            else:
+                # Nếu lần này thất bại -> Thử lại sau 1 phút (hoặc dừng tùy logic)
+                tasks_status[task_id]["msg"] = f"[Lần {round_display}] Thất bại. Thử lại sau 60s..."
+                time.sleep(60)
+                # (Ở đây mình chọn tiếp tục vòng lặp để retry lần này, không tăng success_round)
 
-        tasks_status[task_id]["msg"] = f"User: {nickname}. Đang gửi lệnh..."
-        payload = { 
-            "status": "success", "token": d1.get("token"), "user_id": d1.get("user_id"), 
-            "sec_uid": d1.get("sec_uid"), "username": username, "followers_count": start_fl, 
-            "nickname": nickname, "type": "followers", "success": True 
-        }
-
-        api_slow = False
-        try:
-            ss.post("https://tikfollowers.com/api/process", json=payload, headers=headers_search, timeout=25)
-        except (ReadTimeout, ConnectTimeout):
-            api_slow = True
-            tasks_status[task_id]["msg"] = "API chậm, đợi 1-2 phút check lại..."
-
-        loop_count = 0
-        max_loops = 20 if api_slow else 5
-        final_status = "error"
-        final_msg = "Không tăng follow."
-        final_fl = start_fl
-
-        while loop_count < max_loops:
-            time.sleep(10)
-            now_fl = get_live_follower_count(username)
-            if now_fl and now_fl > start_fl:
-                diff = now_fl - start_fl
-                final_status = "success"
-                final_msg = f"Đã tăng {diff} Follow thành công!"
-                final_fl = now_fl
-                record_cooldown_history(username) # Ghi history TRƯỚC khi báo success
-                increment_success_count(username)
-                break
-            tasks_status[task_id]["msg"] = f"Đang check lại... ({loop_count+1}/{max_loops})"
-            loop_count += 1
-
-        tasks_status[task_id]["status"] = final_status
-        tasks_status[task_id]["msg"] = final_msg
-        tasks_status[task_id]["current_followers"] = final_fl
+        # Kết thúc vòng lặp
+        tasks_status[task_id]["status"] = "success"
 
     except Exception as e:
         tasks_status[task_id] = {"status": "error", "msg": f"System Error: {str(e)}"}
     finally:
         if username in running_users: del running_users[username]
+        # Giữ task online thêm 1 lúc để user đọc kết quả rồi xóa
         time.sleep(DELETE_TASK_AFTER)
         if task_id in tasks_status: del tasks_status[task_id]
 
 # ==========================================
-# 4. API ENDPOINTS (NÂNG CẤP V11)
+# 4. API ENDPOINTS (NÂNG CẤP V12)
 # ==========================================
 
 @app.route('/ping', methods=['GET'])
 def ping_server():
     return jsonify({"status": "ok", "msg": "pong"})
 
-# --- CHECK KEY: Thêm hiển thị thông tin STK ---
 @app.route('/checkkey', methods=['GET'])
 def check_key_info():
     key = request.args.get('key')
     if not key: return jsonify({"status": "error", "msg": "Thiếu key"})
-
     if key == ADMIN_KEY_MASTER:
         return jsonify({ "status": "success", "type": "ADMIN MASTER", "expiry": "Vĩnh viễn", "msg": "Key Admin quyền lực nhất" })
-
     keys_db = load_json(KEYS_FILE)
-    if key not in keys_db:
-        return jsonify({"status": "error", "msg": "Key không tồn tại"})
-
+    if key not in keys_db: return jsonify({"status": "error", "msg": "Key không tồn tại"})
     data = keys_db[key]
-    
     if data["type"] == "auto":
         remaining = data["expire"] - time.time()
         expiry_date = datetime.fromtimestamp(data["expire"]).strftime('%Y-%m-%d %H:%M:%S')
-        
-        if remaining <= 0:
-             return jsonify({ "status": "expired", "msg": "Key đã hết hạn", "expiry_date": expiry_date })
-        
+        if remaining <= 0: return jsonify({ "status": "expired", "msg": "Key đã hết hạn", "expiry_date": expiry_date })
         time_left = format_time_diff(remaining)
-        
-        # Thêm thông tin về STK (Max Users)
         max_users = data.get("max_users", 9999)
         used_users_list = data.get("used_users", [])
-        
         return jsonify({
-            "status": "success",
-            "type": "AUTO",
-            "expiry": time_left,
-            "expiry_date": expiry_date,
-            "max_devices": data.get("max_devices", 1),
-            "used_devices": len(data.get("used_ips", [])),
-            "max_stk": max_users,  # Tổng số TK được buff
-            "used_stk": len(used_users_list), # Số TK đã dùng
-            "msg": "Key hợp lệ"
+            "status": "success", "type": "AUTO", "expiry": time_left, "expiry_date": expiry_date,
+            "max_devices": data.get("max_devices", 1), "used_devices": len(data.get("used_ips", [])),
+            "max_stk": max_users, "used_stk": len(used_users_list), "msg": "Key hợp lệ"
         })
     elif data["type"] == "unlimited":
         return jsonify({ "status": "success", "type": "VIP UNLIMITED", "expiry": "Vĩnh viễn", "msg": "Key VIP vĩnh viễn" })
-    
     return jsonify({"status": "error", "msg": "Lỗi định dạng key"})
 
 @app.route('/checkauto', methods=['GET'])
@@ -373,23 +381,28 @@ def check_auto_details():
     m, s = divmod(int(time.time() - start_t), 60)
     user = task_data.get("username", "unknown")
     
+    target = task_data.get("target_counts", 1)
+    done = task_data.get("done_counts", 0)
+
     response = {
         "status": task_data.get("status"), 
         "msg": task_data.get("msg"),
         "username": user, 
         "time_running": f"{m} phút {s} giây",
+        "progress": f"{done}/{target} lần", # Hiển thị tiến độ
         "date": get_vn_date_str(), 
         "total_success_count": get_success_count(user),
         "current_followers": task_data.get("current_followers", "Chưa cập nhật"),
         "cooldown_msg": ""
     }
 
+    # Nếu Đã xong hết
     if task_data.get("status") == "success":
+        response["msg"] = "✅ Đã hoàn thành toàn bộ yêu cầu!"
         can_buff, wait_time = check_history_cooldown(user)
         if not can_buff:
             wm, ws = divmod(wait_time, 60)
-            response["cooldown_msg"] = f"⏳ Đợi {wm} phút {ws} giây để buff lần 2"
-            response["msg"] += f" (Đợi {wm}p {ws}s buff tiếp)"
+            response["cooldown_msg"] = f"⏳ Đợi {wm} phút {ws} giây nếu muốn tạo task mới"
 
     used_key = task_data.get("key_used")
     key_info = "Không xác định"
@@ -398,11 +411,18 @@ def check_auto_details():
 
     return jsonify(response)
 
-# --- AUTO: Thêm logic check STK (Số lượng tài khoản) ---
+# --- AUTO: Logic check Time vs Counts ---
 @app.route('/auto', methods=['GET'])
 def api_auto():
     username = request.args.get('username')
     key = request.args.get('keyauto')
+    
+    # Lấy số lần muốn buff (Mặc định là 1)
+    try:
+        req_counts = int(request.args.get('counts', 1))
+    except:
+        req_counts = 1
+
     ip = request.remote_addr
     
     if not SERVER_ACTIVE and key != SERVER_KEY: return jsonify({"status": "maintenance"})
@@ -413,31 +433,43 @@ def api_auto():
         if key not in keys_db: return jsonify({"status": "error", "msg": "Sai key"})
         data = keys_db[key]
         if data["type"] == "auto":
-            if time.time() > data["expire"]: 
+            current_t = time.time()
+            if current_t > data["expire"]: 
                 del keys_db[key]; save_json(KEYS_FILE, keys_db)
                 return jsonify({"status": "error", "msg": "Key hết hạn"})
             
-            # 1. Check IP Devices
+            # --- CHECK TIME LOGIC (MỚI) ---
+            # 1 lần = 15 phút (900s). Nếu req_counts > 1, cần (req_counts - 1) * 900s chờ + thời gian chạy
+            # Tính đơn giản: Cần ít nhất (req_counts * 15 phút) thời gian còn lại
+            required_seconds = req_counts * COOLDOWN_SECONDS
+            remaining_key_seconds = data["expire"] - current_t
+            
+            if required_seconds > remaining_key_seconds:
+                # Tính số lần tối đa có thể chạy
+                max_possible = int(remaining_key_seconds // COOLDOWN_SECONDS)
+                if max_possible < 1: max_possible = 1 # Ít nhất cho chạy 1 lần nếu còn tí time
+                
+                return jsonify({
+                    "status": "error",
+                    "msg": f"Key không đủ thời gian cho {req_counts} lần! (Cần {required_seconds//60}p, còn {int(remaining_key_seconds//60)}p). Tối đa chỉ được: {max_possible} lần.",
+                    "max_allowed": max_possible
+                })
+            # ------------------------------
+
             if ip not in data["used_ips"]:
                 if len(data["used_ips"]) >= data["max_devices"]: return jsonify({"status": "error", "msg": "Max devices"})
                 data["used_ips"].append(ip)
                 save_json(KEYS_FILE, keys_db)
             
-            # 2. Check STK (User Limit) - MỚI THÊM
             used_users = data.get("used_users", [])
-            limit_users = data.get("max_users", 9999) # Mặc định nếu không có là 9999
-            
+            limit_users = data.get("max_users", 9999)
             if username not in used_users:
-                if len(used_users) >= limit_users:
-                    return jsonify({
-                        "status": "error", 
-                        "msg": f"Key đã hết lượt thêm User mới (Max: {limit_users})"
-                    })
+                if len(used_users) >= limit_users: return jsonify({"status": "error", "msg": f"Max users limit ({limit_users})"})
                 used_users.append(username)
                 data["used_users"] = used_users
                 save_json(KEYS_FILE, keys_db)
             
-            key_expiry_str = format_time_diff(data["expire"] - time.time())
+            key_expiry_str = format_time_diff(remaining_key_seconds)
         else:
             key_expiry_str = "Vĩnh viễn"
     else:
@@ -451,9 +483,17 @@ def api_auto():
     
     task_id = str(uuid.uuid4())
     running_users[username] = task_id
-    threading.Thread(target=worker_buff, args=(task_id, username, key)).start()
     
-    return jsonify({ "status": "pending", "task_id": task_id, "key_time_left": key_expiry_str, "msg": "Success" })
+    # Truyền req_counts vào worker
+    threading.Thread(target=worker_buff, args=(task_id, username, key, req_counts)).start()
+    
+    return jsonify({ 
+        "status": "pending", 
+        "task_id": task_id, 
+        "key_time_left": key_expiry_str, 
+        "msg": f"Đã nhận lệnh buff {req_counts} lần liên tục!",
+        "total_counts": req_counts 
+    })
 
 @app.route('/admintiktoksv', methods=['GET'])
 def admin_server():
@@ -464,23 +504,18 @@ def admin_server():
     elif mode == 'off': SERVER_ACTIVE = False
     return jsonify({"status": "success", "server": SERVER_ACTIVE})
 
-# --- ADMIN CREATE KEY AUTO: Thêm tham số stk ---
 @app.route('/admintik', methods=['GET'])
 def create_auto_key():
     key = request.args.get('createkeyauto')
     max_dev = request.args.get('devices', type=int)
     dur = request.args.get('time')
-    stk_limit = request.args.get('stk', type=int, default=999) # Mặc định 999 nếu không nhập
-    
+    stk_limit = request.args.get('stk', type=int, default=999)
     if not key or not max_dev or not dur: return jsonify({"msg": "Thiếu tham số"})
     keys = load_json(KEYS_FILE)
     keys[key] = {
-        "type": "auto", 
-        "expire": time.time() + parse_duration(dur), 
-        "max_devices": max_dev, 
-        "max_users": stk_limit, # Lưu giới hạn STK
-        "used_ips": [],
-        "used_users": []        # Danh sách user đã dùng
+        "type": "auto", "expire": time.time() + parse_duration(dur), 
+        "max_devices": max_dev, "max_users": stk_limit, 
+        "used_ips": [], "used_users": []
     }
     save_json(KEYS_FILE, keys)
     return jsonify({"status": "success", "msg": f"Created Key limit {stk_limit} users"})
@@ -505,16 +540,12 @@ def web_buff():
     if not SERVER_ACTIVE: return jsonify({"status": "maintenance", "msg": "Bảo trì."})
     username = request.args.get('username')
     if not username: return jsonify({"msg": "Thiếu username"}), 400
-    
-    if username in running_users:
-        return jsonify({ "status": "error", "msg": f"Đang chạy tiến trình khác!", "task_id": running_users[username] })
-        
+    if username in running_users: return jsonify({ "status": "error", "msg": f"Đang chạy tiến trình khác!", "task_id": running_users[username] })
     can_buff, wait_time = check_history_cooldown(username)
     if not can_buff: return jsonify({"status": "cooldown", "msg": f"Đợi {wait_time // 60}p {wait_time % 60}s"})
-    
     task_id = str(uuid.uuid4())
     running_users[username] = task_id
-    threading.Thread(target=worker_buff, args=(task_id, username, "WEB_FREE")).start()
+    threading.Thread(target=worker_buff, args=(task_id, username, "WEB_FREE", 1)).start()
     return jsonify({"status": "pending", "task_id": task_id})
 
 @app.route('/checkfl', methods=['GET'])
@@ -522,12 +553,10 @@ def check_status():
     task_id = request.args.get('task_id')
     task_data = tasks_status.get(task_id)
     if not task_data: return jsonify({"status": "not_found", "msg": "Not found"})
-    
     response = task_data.copy()
     start_t = task_data.get("start_time", time.time())
     m, s = divmod(int(time.time() - start_t), 60)
     response["time_running"] = f"{m} phút {s} giây"
-    
     if task_data.get("status") == "success":
         user = task_data.get("username")
         can_buff, wait_time = check_history_cooldown(user)
@@ -535,7 +564,6 @@ def check_status():
              wm, ws = divmod(wait_time, 60)
              response["cooldown_msg"] = f"⏳ Đợi {wm}p {ws}s để buff tiếp"
              response["msg"] += f" (Wait {wm}p{ws}s)"
-             
     return jsonify(response)
 
 if __name__ == '__main__':
