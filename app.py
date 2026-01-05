@@ -10,7 +10,7 @@ from datetime import datetime, timezone, timedelta
 
 app = Flask(__name__)
 
-# ================= CẤU HÌNH HỆ THỐNG v10 =================
+# ================= CẤU HÌNH HỆ THỐNG =================
 HISTORY_FILE = "history_buff.txt"
 STATS_FILE = "auto_stats.json"
 KEYS_FILE = "keys_store.json"
@@ -26,7 +26,7 @@ SERVER_KEY = "SEVERKINGADMINFL"
 SERVER_ACTIVE = True
 
 # ==========================================
-# 0. GIAO DIỆN WEB (v10)
+# 0. GIAO DIỆN WEB 
 # ==========================================
 HTML_PAGE = """
 <!DOCTYPE html>
@@ -34,7 +34,7 @@ HTML_PAGE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🚀 TIKTOK BUFF PRO v10 ULTIMATE</title>
+    <title>🚀 TIKTOK BUFF PRO ULTIMATE</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;800&display=swap');
@@ -66,7 +66,7 @@ HTML_PAGE = """
 <body>
     <div class="theme-toggle" onclick="toggleTheme()"><i id="theme-icon" class="fas fa-moon"></i></div>
     <div class="neu-box">
-        <h1><i class="fab fa-tiktok"></i> ADMIN BUFF v10</h1>
+        <h1><i class="fab fa-tiktok"></i> ADMIN BUFF </h1>
         <div style="text-align: center;">
             <button class="neu-btn ping-btn" onclick="checkServerPing()"><i class="fas fa-satellite-dish"></i> CHECK SEVER PING: <span id="ping-val">--</span></button>
         </div>
@@ -76,7 +76,7 @@ HTML_PAGE = """
     </div>
     <div class="neu-box">
         <h3 style="margin-top:0"><i class="fas fa-terminal"></i> LIVE LOGS</h3>
-        <div id="log-area"><div class="st-info">[SYSTEM] Hệ thống v10 sẵn sàng...</div></div>
+        <div id="log-area"><div class="st-info">[SYSTEM] Hệ thống v11 sẵn sàng...</div></div>
     </div>
     <script>
         function toggleTheme() { document.body.classList.toggle('dark-mode'); const icon = document.getElementById('theme-icon'); icon.className = document.body.classList.contains('dark-mode') ? 'fas fa-sun' : 'fas fa-moon'; }
@@ -311,48 +311,41 @@ def worker_buff(task_id, username, used_key=None):
         if task_id in tasks_status: del tasks_status[task_id]
 
 # ==========================================
-# 4. API ENDPOINTS (NÂNG CẤP V10)
+# 4. API ENDPOINTS (NÂNG CẤP V11)
 # ==========================================
 
 @app.route('/ping', methods=['GET'])
 def ping_server():
     return jsonify({"status": "ok", "msg": "pong"})
 
-# --- CHECK KEY: Kiểm tra thông tin key ---
+# --- CHECK KEY: Thêm hiển thị thông tin STK ---
 @app.route('/checkkey', methods=['GET'])
 def check_key_info():
     key = request.args.get('key')
     if not key: return jsonify({"status": "error", "msg": "Thiếu key"})
 
-    # Check Admin/Server Keys
     if key == ADMIN_KEY_MASTER:
-        return jsonify({
-            "status": "success",
-            "type": "ADMIN MASTER",
-            "expiry": "Vĩnh viễn",
-            "msg": "Key Admin quyền lực nhất"
-        })
+        return jsonify({ "status": "success", "type": "ADMIN MASTER", "expiry": "Vĩnh viễn", "msg": "Key Admin quyền lực nhất" })
 
-    # Check Database Keys
     keys_db = load_json(KEYS_FILE)
     if key not in keys_db:
         return jsonify({"status": "error", "msg": "Key không tồn tại"})
 
     data = keys_db[key]
     
-    # Check Expiry
     if data["type"] == "auto":
         remaining = data["expire"] - time.time()
         expiry_date = datetime.fromtimestamp(data["expire"]).strftime('%Y-%m-%d %H:%M:%S')
         
         if remaining <= 0:
-             return jsonify({
-                "status": "expired",
-                "msg": "Key đã hết hạn",
-                "expiry_date": expiry_date
-             })
+             return jsonify({ "status": "expired", "msg": "Key đã hết hạn", "expiry_date": expiry_date })
         
         time_left = format_time_diff(remaining)
+        
+        # Thêm thông tin về STK (Max Users)
+        max_users = data.get("max_users", 9999)
+        used_users_list = data.get("used_users", [])
+        
         return jsonify({
             "status": "success",
             "type": "AUTO",
@@ -360,19 +353,15 @@ def check_key_info():
             "expiry_date": expiry_date,
             "max_devices": data.get("max_devices", 1),
             "used_devices": len(data.get("used_ips", [])),
+            "max_stk": max_users,  # Tổng số TK được buff
+            "used_stk": len(used_users_list), # Số TK đã dùng
             "msg": "Key hợp lệ"
         })
     elif data["type"] == "unlimited":
-        return jsonify({
-            "status": "success",
-            "type": "VIP UNLIMITED",
-            "expiry": "Vĩnh viễn",
-            "msg": "Key VIP vĩnh viễn"
-        })
+        return jsonify({ "status": "success", "type": "VIP UNLIMITED", "expiry": "Vĩnh viễn", "msg": "Key VIP vĩnh viễn" })
     
     return jsonify({"status": "error", "msg": "Lỗi định dạng key"})
 
-# --- CHECK AUTO: Hiện đếm ngược, Key Expiry, Follow hiện tại ---
 @app.route('/checkauto', methods=['GET'])
 def check_auto_details():
     task_id = request.args.get('task_id')
@@ -380,7 +369,6 @@ def check_auto_details():
     task_data = tasks_status.get(task_id)
     if not task_data: return jsonify({"status": "not_found", "msg": "Task không tồn tại/đã xóa"})
     
-    # 1. Thời gian chạy
     start_t = task_data.get("start_time", time.time())
     m, s = divmod(int(time.time() - start_t), 60)
     user = task_data.get("username", "unknown")
@@ -396,25 +384,21 @@ def check_auto_details():
         "cooldown_msg": ""
     }
 
-    # 2. Xử lý Logic Success -> Tính đếm ngược Cooldown
     if task_data.get("status") == "success":
         can_buff, wait_time = check_history_cooldown(user)
         if not can_buff:
             wm, ws = divmod(wait_time, 60)
-            # Tạo chuỗi msg theo yêu cầu
             response["cooldown_msg"] = f"⏳ Đợi {wm} phút {ws} giây để buff lần 2"
             response["msg"] += f" (Đợi {wm}p {ws}s buff tiếp)"
 
-    # 3. Tính thời gian hết hạn Key
     used_key = task_data.get("key_used")
     key_info = "Không xác định"
-    if used_key:
-        key_info = get_key_expiry_info(used_key)
+    if used_key: key_info = get_key_expiry_info(used_key)
     response["key_remaining"] = key_info
 
     return jsonify(response)
 
-# --- AUTO: Hiện ngày hết hạn Key ---
+# --- AUTO: Thêm logic check STK (Số lượng tài khoản) ---
 @app.route('/auto', methods=['GET'])
 def api_auto():
     username = request.args.get('username')
@@ -424,7 +408,6 @@ def api_auto():
     if not SERVER_ACTIVE and key != SERVER_KEY: return jsonify({"status": "maintenance"})
     keys_db = load_json(KEYS_FILE)
     
-    # Validate Key
     key_expiry_str = ""
     if key != ADMIN_KEY_MASTER:
         if key not in keys_db: return jsonify({"status": "error", "msg": "Sai key"})
@@ -433,12 +416,27 @@ def api_auto():
             if time.time() > data["expire"]: 
                 del keys_db[key]; save_json(KEYS_FILE, keys_db)
                 return jsonify({"status": "error", "msg": "Key hết hạn"})
+            
+            # 1. Check IP Devices
             if ip not in data["used_ips"]:
                 if len(data["used_ips"]) >= data["max_devices"]: return jsonify({"status": "error", "msg": "Max devices"})
                 data["used_ips"].append(ip)
                 save_json(KEYS_FILE, keys_db)
             
-            # Tính thời gian còn lại
+            # 2. Check STK (User Limit) - MỚI THÊM
+            used_users = data.get("used_users", [])
+            limit_users = data.get("max_users", 9999) # Mặc định nếu không có là 9999
+            
+            if username not in used_users:
+                if len(used_users) >= limit_users:
+                    return jsonify({
+                        "status": "error", 
+                        "msg": f"Key đã hết lượt thêm User mới (Max: {limit_users})"
+                    })
+                used_users.append(username)
+                data["used_users"] = used_users
+                save_json(KEYS_FILE, keys_db)
+            
             key_expiry_str = format_time_diff(data["expire"] - time.time())
         else:
             key_expiry_str = "Vĩnh viễn"
@@ -446,12 +444,7 @@ def api_auto():
         key_expiry_str = "Vĩnh viễn (Admin)"
 
     if username in running_users:
-        return jsonify({
-            "status": "running", 
-            "msg": "Đang chạy task cũ", 
-            "task_id": running_users[username],
-            "key_time_left": key_expiry_str
-        })
+        return jsonify({ "status": "running", "msg": "Đang chạy task cũ", "task_id": running_users[username], "key_time_left": key_expiry_str })
     
     can_buff, wait_time = check_history_cooldown(username)
     if not can_buff: return jsonify({"status": "cooldown", "msg": f"Wait {wait_time}s"})
@@ -460,14 +453,8 @@ def api_auto():
     running_users[username] = task_id
     threading.Thread(target=worker_buff, args=(task_id, username, key)).start()
     
-    return jsonify({
-        "status": "pending", 
-        "task_id": task_id, 
-        "key_time_left": key_expiry_str, 
-        "msg": "Success"
-    })
+    return jsonify({ "status": "pending", "task_id": task_id, "key_time_left": key_expiry_str, "msg": "Success" })
 
-# --- CÁC API KHÁC GIỮ NGUYÊN ---
 @app.route('/admintiktoksv', methods=['GET'])
 def admin_server():
     global SERVER_ACTIVE
@@ -477,16 +464,26 @@ def admin_server():
     elif mode == 'off': SERVER_ACTIVE = False
     return jsonify({"status": "success", "server": SERVER_ACTIVE})
 
+# --- ADMIN CREATE KEY AUTO: Thêm tham số stk ---
 @app.route('/admintik', methods=['GET'])
 def create_auto_key():
     key = request.args.get('createkeyauto')
     max_dev = request.args.get('devices', type=int)
     dur = request.args.get('time')
+    stk_limit = request.args.get('stk', type=int, default=999) # Mặc định 999 nếu không nhập
+    
     if not key or not max_dev or not dur: return jsonify({"msg": "Thiếu tham số"})
     keys = load_json(KEYS_FILE)
-    keys[key] = {"type": "auto", "expire": time.time() + parse_duration(dur), "max_devices": max_dev, "used_ips": []}
+    keys[key] = {
+        "type": "auto", 
+        "expire": time.time() + parse_duration(dur), 
+        "max_devices": max_dev, 
+        "max_users": stk_limit, # Lưu giới hạn STK
+        "used_ips": [],
+        "used_users": []        # Danh sách user đã dùng
+    }
     save_json(KEYS_FILE, keys)
-    return jsonify({"status": "success"})
+    return jsonify({"status": "success", "msg": f"Created Key limit {stk_limit} users"})
 
 @app.route('/admintiktok', methods=['GET'])
 def create_vip_key():
@@ -526,10 +523,7 @@ def check_status():
     task_data = tasks_status.get(task_id)
     if not task_data: return jsonify({"status": "not_found", "msg": "Not found"})
     
-    # Update lại checkfl để Web cũng hiện đẹp
     response = task_data.copy()
-    
-    # Format time running
     start_t = task_data.get("start_time", time.time())
     m, s = divmod(int(time.time() - start_t), 60)
     response["time_running"] = f"{m} phút {s} giây"
