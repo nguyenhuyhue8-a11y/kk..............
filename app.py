@@ -10,10 +10,11 @@ from datetime import datetime, timezone, timedelta
 
 app = Flask(__name__)
 
-# ================= CẤU HÌNH HỆ THỐNG V21 (FIX REAL IP) =================
+# ================= CẤU HÌNH HỆ THỐNG V22 (DAILY LIMIT 20) =================
 HISTORY_FILE = "history_buff.txt"
 STATS_FILE = "auto_stats.json"
 KEYS_FILE = "keys_store.json"
+DAILY_LIMIT_FILE = "daily_limit.json" # File lưu giới hạn ngày
 
 tasks_status = {}
 running_users = {}
@@ -22,12 +23,15 @@ running_users = {}
 COOLDOWN_SECONDS = 15 * 60 
 DELETE_TASK_AFTER = 5 * 60 
 
+# GIỚI HẠN BUFF FREE
+MAX_DAILY_FREE = 20  # Số lần tối đa 1 ngày cho User Free
+
 ADMIN_KEY_MASTER = "ADMINVIPFREEFL"
 SERVER_KEY = "SEVERKINGADMINFL"
 SERVER_ACTIVE = True
 
 # ==========================================
-# 0. GIAO DIỆN WEB (v20)
+# 0. GIAO DIỆN WEB (v22)
 # ==========================================
 HTML_PAGE = """
 <!DOCTYPE html>
@@ -35,7 +39,7 @@ HTML_PAGE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🚀 TIKTOK BUFF PRO v21 ULTIMATE</title>
+    <title>🚀 TIKTOK BUFF PRO v22 ULTIMATE</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;800&display=swap');
@@ -67,7 +71,7 @@ HTML_PAGE = """
 <body>
     <div class="theme-toggle" onclick="toggleTheme()"><i id="theme-icon" class="fas fa-moon"></i></div>
     <div class="neu-box">
-        <h1><i class="fab fa-tiktok"></i> ADMIN BUFF v21</h1>
+        <h1><i class="fab fa-tiktok"></i> ADMIN BUFF v22</h1>
         <div style="text-align: center;">
             <button class="neu-btn ping-btn" onclick="checkServerPing()"><i class="fas fa-satellite-dish"></i> CHECK SEVER PING: <span id="ping-val">--</span></button>
         </div>
@@ -77,7 +81,7 @@ HTML_PAGE = """
     </div>
     <div class="neu-box">
         <h3 style="margin-top:0"><i class="fas fa-terminal"></i> LIVE LOGS</h3>
-        <div id="log-area"><div class="st-info">[SYSTEM] Hệ thống v21 sẵn sàng...</div></div>
+        <div id="log-area"><div class="st-info">[SYSTEM] Hệ thống v22 sẵn sàng...</div></div>
     </div>
     <script>
         function toggleTheme() { document.body.classList.toggle('dark-mode'); const icon = document.getElementById('theme-icon'); icon.className = document.body.classList.contains('dark-mode') ? 'fas fa-sun' : 'fas fa-moon'; }
@@ -99,6 +103,7 @@ HTML_PAGE = """
                 const res = await fetch(`/bufffl?username=${user}`); const data = await res.json();
                 if (data.status === 'error' && data.msg.includes('Đang chạy')) { log(`⛔ ${data.msg}`, 'st-err', user); return; }
                 if (data.status === 'cooldown' || data.status === 'maintenance') { log(`⏳ ${data.msg}`, 'st-info', user); return; }
+                if (data.status === 'daily_limit') { log(`⛔ ${data.msg}`, 'st-err', user); return; }
                 if (data.status === 'pending') { log(`✅ Task ID: ${data.task_id}`, 'st-ok', user); trackTask(data.task_id, user); } 
                 else { log(`❌ ${data.msg}`, 'st-err', user); }
             } catch (e) { log(`❌ Lỗi kết nối!`, 'st-err', user); }
@@ -158,19 +163,43 @@ def format_time_diff(seconds):
     return " ".join(parts)
 
 def get_vn_date_str():
+    # Lấy ngày giờ VN để làm chuẩn reset (UTC+7)
     return datetime.now(timezone(timedelta(hours=7))).strftime('%Y-%m-%d')
 
 # --- HÀM LẤY IP THẬT (FIX PROXY/RENDER) ---
 def get_client_ip():
-    # Render/Cloudflare gửi IP thật trong header X-Forwarded-For
     if request.headers.get('X-Forwarded-For'):
-        # Lấy IP đầu tiên trong chuỗi (IP của client gốc)
         return request.headers.get('X-Forwarded-For').split(',')[0].strip()
     return request.remote_addr
 
 # ==========================================
-# 2. HELPER LOGIC
+# 2. HELPER LOGIC (THÊM DAILY LIMIT)
 # ==========================================
+
+# --- HÀM KIỂM TRA GIỚI HẠN NGÀY ---
+def check_and_update_daily_limit(username):
+    today = get_vn_date_str()
+    data = load_json(DAILY_LIMIT_FILE)
+    
+    # Nếu file chưa có dữ liệu hoặc đã qua ngày mới -> Reset
+    if "date" not in data or data["date"] != today:
+        data = {
+            "date": today,
+            "users": {}
+        }
+    
+    # Lấy số lần đã dùng hôm nay
+    current_count = data["users"].get(username, 0)
+    
+    if current_count >= MAX_DAILY_FREE:
+        return False, current_count
+    
+    # Nếu chưa vượt quá, cộng thêm 1 và lưu
+    data["users"][username] = current_count + 1
+    save_json(DAILY_LIMIT_FILE, data)
+    
+    return True, current_count + 1
+
 def check_history_cooldown(username):
     if not os.path.exists(HISTORY_FILE): return True, 0
     current_time = time.time()
@@ -219,14 +248,14 @@ def get_key_expiry_info(key):
     return format_time_diff(remaining)
 
 # ==========================================
-# 3. WORKER BUFF (LOGIC V20 - LOOP MULTI-COUNTS)
+# 3. WORKER BUFF
 # ==========================================
 def get_live_follower_count(username):
     try:
         url = "https://www.tikwm.com/api/user/info"
         params = {"unique_id": username}
         headers = { "User-Agent": "Mozilla/5.0" }
-        r = requests.get(url, params=params, headers=headers, timeout=18)
+        r = requests.get(url, params=params, headers=headers, timeout=10)
         if r.status_code == 200:
             data = r.json()
             if data.get("code") == 0: return int(data["data"]["stats"]["followerCount"])
@@ -266,7 +295,7 @@ def worker_buff(task_id, username, used_key=None, target_counts=1):
                 tasks_status[task_id]["msg"] = f"[Lần {round_display}/{target_counts}] Đang quét thông tin..."
                 r1 = ss.post("https://tikfollowers.com/api/search", 
                              json={"input": username, "type": "getUserDetails"}, 
-                             headers=headers_search, timeout=22)
+                             headers=headers_search, timeout=20)
                 d1 = r1.json()
                 if d1.get("status") != "success": 
                     raise Exception(d1.get("message", "User không tồn tại."))
@@ -290,14 +319,14 @@ def worker_buff(task_id, username, used_key=None, target_counts=1):
 
             api_slow = False
             try:
-                ss.post("https://tikfollowers.com/api/process", json=payload, headers=headers_search, timeout=30)
+                ss.post("https://tikfollowers.com/api/process", json=payload, headers=headers_search, timeout=25)
             except (ReadTimeout, ConnectTimeout):
                 api_slow = True
                 tasks_status[task_id]["msg"] = f"[Lần {round_display}] API chậm, chờ 1 chút..."
 
             # 3. Check kết quả (Chờ follow lên)
             loop_count = 0
-            max_loops = 20 if api_slow else 18
+            max_loops = 20 if api_slow else 6
             round_success = False
 
             while loop_count < max_loops:
@@ -343,7 +372,7 @@ def worker_buff(task_id, username, used_key=None, target_counts=1):
         if task_id in tasks_status: del tasks_status[task_id]
 
 # ==========================================
-# 4. API ENDPOINTS (NÂNG CẤP V21)
+# 4. API ENDPOINTS (NÂNG CẤP V22)
 # ==========================================
 
 @app.route('/ping', methods=['GET'])
@@ -415,7 +444,7 @@ def check_auto_details():
 
     return jsonify(response)
 
-# --- AUTO: STRICT IP LOCK (V21 - FIX PROXY IP) ---
+# --- AUTO: STRICT IP LOCK ---
 @app.route('/auto', methods=['GET'])
 def api_auto():
     username = request.args.get('username')
@@ -425,7 +454,6 @@ def api_auto():
     except:
         req_counts = 1
 
-    # THAY ĐỔI V21: DÙNG HÀM get_client_ip ĐỂ LẤY IP THẬT
     ip = get_client_ip()
     
     if not SERVER_ACTIVE and key != SERVER_KEY: return jsonify({"status": "maintenance"})
@@ -441,7 +469,6 @@ def api_auto():
                 del keys_db[key]; save_json(KEYS_FILE, keys_db)
                 return jsonify({"status": "error", "msg": "Key hết hạn"})
             
-            # --- V20 STRICT IP CHECK (DÙNG IP THẬT) ---
             if ip not in data["used_ips"]:
                 if len(data["used_ips"]) >= data["max_devices"]:
                     return jsonify({
@@ -451,7 +478,6 @@ def api_auto():
                 data["used_ips"].append(ip)
                 save_json(KEYS_FILE, keys_db)
             
-            # --- CHECK USERNAME LIMIT ---
             used_users = data.get("used_users", [])
             limit_users = data.get("max_users", 9999)
             
@@ -465,7 +491,6 @@ def api_auto():
                 data["used_users"] = used_users
                 save_json(KEYS_FILE, keys_db)
             
-            # Check Time Logic
             required_seconds = req_counts * COOLDOWN_SECONDS
             remaining_key_seconds = data["expire"] - current_t
             if required_seconds > remaining_key_seconds:
@@ -541,14 +566,29 @@ def ui(): return HTML_PAGE
 @app.route('/')
 def index(): return '<meta http-equiv="refresh" content="0; url=/url.html" />'
 
+# --- API BUFF FREE (CÓ CHECK DAILY LIMIT) ---
 @app.route('/bufffl', methods=['GET'])
 def web_buff():
     if not SERVER_ACTIVE: return jsonify({"status": "maintenance", "msg": "Bảo trì."})
     username = request.args.get('username')
     if not username: return jsonify({"msg": "Thiếu username"}), 400
-    if username in running_users: return jsonify({ "status": "error", "msg": f"Đang chạy tiến trình khác!", "task_id": running_users[username] })
+    
+    if username in running_users:
+        return jsonify({ "status": "error", "msg": f"Đang chạy tiến trình khác!", "task_id": running_users[username] })
+    
+    # 1. Check Cooldown
     can_buff, wait_time = check_history_cooldown(username)
-    if not can_buff: return jsonify({"status": "cooldown", "msg": f"Đợi {wait_time // 60}p {wait_time % 60}s"})
+    if not can_buff: 
+        return jsonify({"status": "cooldown", "msg": f"Đợi {wait_time // 60}p {wait_time % 60}s"})
+    
+    # 2. Check Daily Limit (V22)
+    is_allowed, count = check_and_update_daily_limit(username)
+    if not is_allowed:
+        return jsonify({
+            "status": "daily_limit",
+            "msg": f"Bạn đã hết lượt Free hôm nay ({MAX_DAILY_FREE}/{MAX_DAILY_FREE}). Quay lại vào ngày mai!"
+        })
+
     task_id = str(uuid.uuid4())
     running_users[username] = task_id
     threading.Thread(target=worker_buff, args=(task_id, username, "WEB_FREE", 1)).start()
